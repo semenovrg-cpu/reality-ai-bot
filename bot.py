@@ -48,7 +48,7 @@ async def analyze_object(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
 
     response = client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-40-mini",
         messages=[
             {
                 "role": "system",

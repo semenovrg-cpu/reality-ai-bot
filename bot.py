@@ -1,91 +1,184 @@
 import os
+import re
+import base64
+import tempfile
 import requests
+from datetime import datetime
 from bs4 import BeautifulSoup
-
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-
 from openai import OpenAI
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# СТАРТ
+
+def extract_links(text):
+    return re.findall(r"https?://\S+", text or "")
+
+
+def get_page_text(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = soup.title.string if soup.title else ""
+        meta = soup.find("meta", attrs={"name": "description"})
+        description = meta.get("content") if meta else ""
+        text = soup.get_text(" ", strip=True)[:4000]
+        return f"Заголовок: {title}\nОписание: {description}\nТекст: {text}"
+    except Exception:
+        return "Страницу прочитать не удалось. Вероятно, площадка защищает объявление."
+
+
+def search_analogs(query):
+    if not SERPAPI_KEY:
+        return "Автопоиск аналогов пока не подключен. Для этого нужно добавить SERPAPI_KEY в Railway Variables."
+
+    try:
+        params = {
+            "engine": "google",
+            "q": query,
+            "api_key": SERPAPI_KEY,
+            "num": 5,
+            "hl": "ru",
+            "gl": "ru"
+        }
+        r = requests.get("https://serpapi.com/search", params=params, timeout=15)
+        data = r.json()
+        results = data.get("organic_results", [])[:5]
+
+        if not results:
+            return "Аналоги через поиск не найдены."
+
+        text = ""
+        for i, item in enumerate(results, 1):
+            text += f"{i}. {item.get('title', '')}\n{item.get('snippet', '')}\n{item.get('link', '')}\n\n"
+        return text
+    except Exception as e:
+        return f"Ошибка поиска аналогов: {e}"
+
+
+def create_pdf_report(text):
+    path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
+
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", font_path))
+        font_name = "DejaVu"
+    except Exception:
+        font_name = "Helvetica"
+
+    doc = SimpleDocTemplate(path, pagesize=A4)
+    styles = getSampleStyleSheet()
+    styles["Normal"].fontName = font_name
+    styles["Title"].fontName = font_name
+
+    story = []
+    story.append(Paragraph("AI-отчет по объекту недвижимости", styles["Title"]))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(datetime.now().strftime("%d.%m.%Y %H:%M"), styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    for block in text.split("\n"):
+        if block.strip():
+            story.append(Paragraph(block.replace("&", "&amp;"), styles["Normal"]))
+            story.append(Spacer(1, 6))
+
+    doc.build(story)
+    return path
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет. Я AI-аналитик недвижимости.\n\n"
-        "Отправь:\n"
-        "- описание объекта\n"
-        "- ссылку на Авито/ЦИАН/Домклик\n"
-        "- или скриншоты объявления"
+        "Пришли описание объекта, ссылку на Авито/ЦИАН/Домклик или скриншот объявления.\n"
+        "Я сделаю анализ и PDF-отчет."
     )
 
-# ОБРАБОТКА ТЕКСТА
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+async def analyze_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    links = extract_links(user_text)
+
+    page_data = ""
+    if links:
+        await update.message.reply_text("Вижу ссылку. Пробую прочитать объявление...")
+        for link in links:
+            page_data += f"\nСсылка: {link}\n{get_page_text(link)}\n"
+
+    analog_query = f"{user_text} аналоги недвижимость цена Иркутск Авито ЦИАН Домклик"
+    analogs = search_analogs(analog_query)
 
     prompt = f"""
-Ты профессиональный аналитик недвижимости.
+Ты ТОП-аналитик рынка недвижимости России.
 
-Проанализируй объект недвижимости.
-
-Данные:
+Данные объекта:
 {user_text}
 
-Сделай:
-1. Оценку объекта
-2. Плюсы
-3. Минусы
-4. Насколько цена адекватна
-5. Для кого подойдет
-6. Риски при продаже
-7. Советы агенту
-8. Прогноз ликвидности
+Данные из ссылки:
+{page_data}
 
-Пиши профессионально и конкретно.
+Найденные аналоги или статус поиска:
+{analogs}
+
+Сделай профессиональный отчет:
+
+1. Краткое резюме объекта
+2. Тип объекта, площадь, цена, цена за м²
+3. Сильные стороны
+4. Слабые стороны
+5. Анализ цены
+6. Диапазон рыночной цены
+7. Сравнение с аналогами
+8. Ликвидность: высокая / средняя / низкая
+9. Прогноз срока продажи
+10. Риски объекта
+11. Что агенту сказать продавцу
+12. Что использовать в рекламе
+13. Что уточнить у собственника
+14. Итоговая рекомендация по цене
+
+Пиши жестко, конкретно, без воды.
+Если реальных аналогов нет — честно напиши, что точный CMA невозможен без базы аналогов.
 """
 
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Ты лучший AI аналитик недвижимости."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            input=prompt
         )
 
-        answer = response.choices[0].message.content
+        answer = response.output_text
 
-        await update.message.reply_text(answer)
+        for i in range(0, len(answer), 3500):
+            await update.message.reply_text(answer[i:i + 3500])
+
+        pdf_path = create_pdf_report(answer)
+        await update.message.reply_document(document=open(pdf_path, "rb"), filename="AI_Realty_Report.pdf")
 
     except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
+        await update.message.reply_text(f"Ошибка анализа: {e}")
 
-# ОБРАБОТКА ФОТО
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+async def analyze_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        await update.message.reply_text("Принял скриншот. Анализирую объявление...")
 
         photo = update.message.photo[-1]
-
         file = await context.bot.get_file(photo.file_id)
+        image_bytes = await file.download_as_bytearray()
 
-        image_url = file.file_path
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        image_url = f"data:image/jpeg;base64,{image_base64}"
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -96,51 +189,61 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         {
                             "type": "text",
                             "text": """
-Проанализируй скриншот объявления недвижимости.
+Ты ТОП-аналитик недвижимости.
 
-Определи:
-1. Что это за объект
-2. Адекватность цены
-3. Плюсы объекта
-4. Минусы объекта
-5. Ликвидность
-6. Что агенту стоит улучшить
-7. Есть ли признаки переоценки
-8. Насколько объявление продающее
+Проанализируй скриншот объявления.
+
+Сделай:
+1. Что за объект
+2. Цена
+3. Площадь
+4. Цена за м²
+5. Сильные стороны
+6. Слабые стороны
+7. Ликвидность
+8. Риски
+9. Насколько объявление продающее
+10. Что агенту улучшить
+11. Что сказать продавцу
+12. Рекомендация по цене
+
+Пиши конкретно, как эксперт рынка.
 """
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": image_url
-                            }
+                            "image_url": {"url": image_url}
                         }
                     ]
                 }
             ],
-            max_tokens=1000
+            max_tokens=1600
         )
 
         answer = response.choices[0].message.content
 
-        await update.message.reply_text(answer)
+        for i in range(0, len(answer), 3500):
+            await update.message.reply_text(answer[i:i + 3500])
+
+        pdf_path = create_pdf_report(answer)
+        await update.message.reply_document(document=open(pdf_path, "rb"), filename="AI_Realty_Report.pdf")
 
     except Exception as e:
         await update.message.reply_text(f"Ошибка анализа фото: {e}")
 
-# ЗАПУСК
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-app.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
-)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_text))
+    app.add_handler(MessageHandler(filters.PHOTO, analyze_photo))
 
-app.add_handler(
-    MessageHandler(filters.PHOTO, handle_photo)
-)
+    print("Бот запущен...")
+    app.run_polling()
 
-print("Бот запущен...")
 
-app.run_polling()
+if __name__ == "__main__":
+    main()
+
+

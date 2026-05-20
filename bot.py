@@ -1,127 +1,146 @@
 import os
-import re
 import requests
 from bs4 import BeautifulSoup
-from openai import OpenAI
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+from openai import OpenAI
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-
-def extract_links(text):
-    return re.findall(r"https?://\S+", text)
-
-
-def get_page_text(url):
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        title = soup.title.string if soup.title else ""
-        description = ""
-
-        meta = soup.find("meta", attrs={"name": "description"})
-        if meta and meta.get("content"):
-            description = meta.get("content")
-
-        text = soup.get_text(" ", strip=True)
-        text = text[:5000]
-
-        return f"Заголовок страницы: {title}\nОписание: {description}\nТекст страницы: {text}"
-
-    except Exception as e:
-        return f"Не удалось прочитать ссылку автоматически. Ошибка: {e}"
-
-
+# СТАРТ
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет. Я AI-аналитик недвижимости.\n\n"
-        "Пришли описание объекта или ссылку на Авито / ЦИАН / Домклик.\n\n"
-        "Лучше всего: город, район, тип, площадь, цена, этаж, состояние."
+        "Отправь:\n"
+        "- описание объекта\n"
+        "- ссылку на Авито/ЦИАН/Домклик\n"
+        "- или скриншоты объявления"
     )
 
+# ОБРАБОТКА ТЕКСТА
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-async def analyze_object(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    links = extract_links(user_text)
-
-    link_data = ""
-
-    if links:
-        await update.message.reply_text("Вижу ссылку. Пробую прочитать объявление...")
-        for link in links:
-            link_data += f"\n\nСсылка: {link}\n{get_page_text(link)}"
 
     prompt = f"""
-Ты профессиональный аналитик рынка недвижимости и помощник агента.
+Ты профессиональный аналитик недвижимости.
 
-Пользователь прислал данные объекта:
+Проанализируй объект недвижимости.
 
+Данные:
 {user_text}
 
-Дополнительные данные из ссылки, если удалось получить:
+Сделай:
+1. Оценку объекта
+2. Плюсы
+3. Минусы
+4. Насколько цена адекватна
+5. Для кого подойдет
+6. Риски при продаже
+7. Советы агенту
+8. Прогноз ликвидности
 
-{link_data}
-
-Сделай анализ в формате:
-
-1. Краткое резюме объекта
-2. Сильные стороны
-3. Слабые стороны
-4. Предварительная оценка ликвидности
-5. Что нужно уточнить у собственника
-6. Рекомендации по цене
-7. Риски объекта
-8. Что сказать агенту
-9. Текст для клиента простым языком
-10. Какие данные нужны для более точной оценки
-
-Важно:
-- Если данных мало, не выдумывай.
-- Если ссылка не прочиталась, честно напиши, что нужен текст объявления или скрин.
-- Не называй точную рыночную цену без базы аналогов.
-- Давай практичные рекомендации для агента.
+Пиши профессионально и конкретно.
 """
 
     try:
-        response = client.responses.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
-            input=prompt
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты лучший AI аналитик недвижимости."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         )
 
-        answer = response.output_text
+        answer = response.choices[0].message.content
 
-        if len(answer) > 3900:
-            for i in range(0, len(answer), 3900):
-                await update.message.reply_text(answer[i:i + 3900])
-        else:
-            await update.message.reply_text(answer)
+        await update.message.reply_text(answer)
 
     except Exception as e:
-        await update.message.reply_text(
-            f"Ошибка при анализе: {e}\n\n"
-            "Проверь OpenAI API ключ и баланс аккаунта."
+        await update.message.reply_text(f"Ошибка: {e}")
+
+# ОБРАБОТКА ФОТО
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    try:
+
+        photo = update.message.photo[-1]
+
+        file = await context.bot.get_file(photo.file_id)
+
+        image_url = file.file_path
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """
+Проанализируй скриншот объявления недвижимости.
+
+Определи:
+1. Что это за объект
+2. Адекватность цены
+3. Плюсы объекта
+4. Минусы объекта
+5. Ликвидность
+6. Что агенту стоит улучшить
+7. Есть ли признаки переоценки
+8. Насколько объявление продающее
+"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1000
         )
 
+        answer = response.choices[0].message.content
 
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+        await update.message.reply_text(answer)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_object))
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка анализа фото: {e}")
 
-    print("Бот запущен...")
-    app.run_polling()
+# ЗАПУСК
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+app.add_handler(CommandHandler("start", start))
 
-if __name__ == "__main__":
-    main()
+app.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+)
 
+app.add_handler(
+    MessageHandler(filters.PHOTO, handle_photo)
+)
 
+print("Бот запущен...")
+
+app.run_polling()

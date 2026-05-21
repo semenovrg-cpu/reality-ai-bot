@@ -5,9 +5,10 @@ import tempfile
 from datetime import datetime
 from html import escape
 
-from openai import OpenAI
-from PIL import Image as PILImage
+import requests
+import replicate
 
+from openai import OpenAI
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -22,6 +23,10 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
+
+if REPLICATE_API_TOKEN:
+    os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -71,9 +76,10 @@ def register_font():
 
 def safe_json_loads(text):
     try:
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        return json.loads(text[start:end])
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}") + 1
+        return json.loads(cleaned[start:end])
     except Exception:
         return {
             "object_title": "Объект недвижимости",
@@ -153,6 +159,7 @@ def create_styled_pdf(data):
             Paragraph(f"<b>Дата отчета</b><br/>{datetime.now().strftime('%d.%m.%Y')}", styles["Body"]),
         ]
     ], colWidths=[75 * mm, 45 * mm, 45 * mm])
+
     info.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), cream),
         ("BOX", (0, 0), (-1, -1), 0.5, gold),
@@ -162,13 +169,13 @@ def create_styled_pdf(data):
     story.append(info)
 
     story.append(Paragraph("Как цена влияет на привлечение покупателей", styles["Section"]))
-    intro = (
+    story.append(Paragraph(
         "Правильная цена — ключевой фактор быстрой и выгодной продажи. "
         "Завышенная цена снижает интерес покупателей, объявление теряет позиции, "
         "просмотры падают, а срок продажи увеличивается. Рыночная цена привлекает больше "
-        "заинтересованных покупателей и повышает вероятность сделки."
-    )
-    story.append(Paragraph(intro, styles["Body"]))
+        "заинтересованных покупателей и повышает вероятность сделки.",
+        styles["Body"]
+    ))
     story.append(Spacer(1, 8))
 
     cards = Table([
@@ -178,6 +185,7 @@ def create_styled_pdf(data):
             Paragraph(f"СРОК ПРОДАЖИ<br/><br/><b>{escape(str(data.get('sale_time', '—')))}</b>", styles["Body"]),
         ]
     ], colWidths=[55 * mm, 55 * mm, 55 * mm])
+
     cards.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (0, 0), black),
         ("BACKGROUND", (1, 0), (1, 0), dark_gold),
@@ -258,21 +266,79 @@ def create_styled_pdf(data):
 
 def photo_prompt(task):
     base = """
-Отредактируй фото недвижимости реалистично.
-Не меняй планировку, окна, стены, двери, вид из окна, площадь, форму помещения и реальные свойства объекта.
-Не добавляй несуществующую мебель.
-Сохрани честный вид объекта.
+Edit this real estate photo realistically.
+Preserve the exact room layout, camera angle, walls, windows, doors, floor, ceiling, furniture positions, room size and view from window.
+Do not redesign the room.
+Do not create a new room.
+Do not remove fixed furniture or architectural elements.
+The result must look like the same property, only cleaner and more professional.
 """
 
     if task == "clean":
-        return base + "Убери мусор, пакеты, коробки, личные вещи, провода и лишние предметы."
+        return base + """
+Remove only visible clutter: small trash, personal belongings, loose cables, random bags, papers, cups, boxes and distracting small objects.
+Keep all real estate features unchanged.
+"""
+
     if task == "light":
-        return base + "Улучши свет, цвет, баланс белого, резкость и общее качество фото."
+        return base + """
+Improve lighting, white balance, contrast, sharpness and color naturally.
+Make the room brighter and cleaner without changing the property.
+"""
+
     if task == "selling":
-        return base + "Сделай фото более продающим: чище, светлее, аккуратнее, без визуального хаоса."
+        return base + """
+Make the photo more attractive for a real estate listing: cleaner, brighter, more premium, but still honest and realistic.
+Do not change layout or furniture placement.
+"""
+
     if task == "listing":
-        return base + "Подготовь фото для Авито, ЦИАН и Домклик: светлое, чистое, ровное, привлекательное."
+        return base + """
+Prepare this photo for Avito, CIAN and real estate listing platforms.
+Make it clean, bright, sharp and professional while preserving the real property exactly.
+"""
+
     return base
+
+
+def download_replicate_output(output):
+    if isinstance(output, list):
+        output = output[0]
+
+    if hasattr(output, "read"):
+        return output.read()
+
+    output_str = str(output)
+
+    if output_str.startswith("http"):
+        r = requests.get(output_str, timeout=120)
+        r.raise_for_status()
+        return r.content
+
+    raise ValueError(f"Не удалось получить файл результата от Replicate: {output_str}")
+
+
+def run_flux_edit(input_path, prompt):
+    with open(input_path, "rb") as image_file:
+        try:
+            return replicate.run(
+                "black-forest-labs/flux-kontext-pro",
+                input={
+                    "input_image": image_file,
+                    "prompt": prompt,
+                    "output_format": "png"
+                }
+            )
+        except Exception:
+            image_file.seek(0)
+            return replicate.run(
+                "black-forest-labs/flux-kontext-pro",
+                input={
+                    "image": image_file,
+                    "prompt": prompt,
+                    "output_format": "png"
+                }
+            )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -369,7 +435,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if mode == "description":
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Ты пишешь сильные продающие описания недвижимости."},
                 {"role": "user", "content": f"Сделай продающее описание объявления:\n{text}"}
@@ -380,7 +446,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if mode == "script":
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Ты бизнес-тренер Century 21 и эксперт по переговорам с продавцами."},
                 {"role": "user", "content": f"Сделай скрипт разговора с продавцом:\n{text}"}
@@ -396,7 +462,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_session(context)
 
     mode = context.user_data.get("mode")
-
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     image_bytes = await file.download_as_bytearray()
@@ -421,35 +486,29 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Сначала выбери действие для фото.", reply_markup=PHOTO_MENU)
             return
 
-        await update.message.reply_text("Фото принято. Обрабатываю 30–120 секунд...")
+        if not REPLICATE_API_TOKEN:
+            await update.message.reply_text("Не найден REPLICATE_API_TOKEN в Railway Variables.")
+            return
 
-        input_jpg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
-        input_png = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        output_png = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+        await update.message.reply_text("Фото принято. Обрабатываю через Replicate/FLUX 30–120 секунд...")
 
-        with open(input_jpg, "wb") as f:
+        input_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
+        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+
+        with open(input_path, "wb") as f:
             f.write(image_bytes)
 
-        img = PILImage.open(input_jpg).convert("RGBA")
-        img.save(input_png)
-
         try:
-            result = client.images.edit(
-                model="gpt-image-1",
-                image=open(input_png, "rb"),
-                prompt=photo_prompt(task),
-                size="1024x1024"
-            )
+            output = run_flux_edit(input_path, photo_prompt(task))
+            result_bytes = download_replicate_output(output)
 
-            result_bytes = base64.b64decode(result.data[0].b64_json)
-
-            with open(output_png, "wb") as f:
+            with open(output_path, "wb") as f:
                 f.write(result_bytes)
 
             await update.message.reply_document(
-                document=open(output_png, "rb"),
+                document=open(output_path, "rb"),
                 filename="C21_AI_photo_ready.png",
-                caption="Готово. Фото улучшено."
+                caption="Готово. Фото обработано. Проверь, что планировка и реальные свойства объекта не изменились."
             )
 
         except Exception as e:
@@ -527,7 +586,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Ты профессиональный CMA-аналитик недвижимости. Отвечай строго JSON."},
                 {"role": "user", "content": content}

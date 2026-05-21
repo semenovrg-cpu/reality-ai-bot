@@ -1,203 +1,362 @@
 import os
-import re
-import base64
 import tempfile
-from datetime import datetime
-from html import escape
-
 from openai import OpenAI
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    Image
+)
+
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus.flowables import HRFlowable
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm
 
+# =========================
+# API
+# =========================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# =========================
+# START
+# =========================
 
-def init_session(context):
-    if "mode" not in context.user_data:
-        context.user_data["mode"] = None
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    context.user_data["object_texts"] = []
+    context.user_data["analog_texts"] = []
+
+    await update.message.reply_text(
+        "🏠 Отправьте:\n\n"
+        "1. Основной объект\n"
+        "2. Затем аналоги\n\n"
+        "После этого напишите:\n"
+        "/report"
+    )
+
+# =========================
+# СОХРАНЕНИЕ ТЕКСТА
+# =========================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    text = update.message.text
+
     if "object_texts" not in context.user_data:
         context.user_data["object_texts"] = []
+
     if "analog_texts" not in context.user_data:
         context.user_data["analog_texts"] = []
-    if "object_images" not in context.user_data:
-        context.user_data["object_images"] = []
-    if "analog_images" not in context.user_data:
-        context.user_data["analog_images"] = []
 
+    # Первый объект = основной
+    if len(context.user_data["object_texts"]) == 0:
+
+        context.user_data["object_texts"].append(text)
+
+        await update.message.reply_text(
+            "✅ Основной объект сохранён.\n\n"
+            "Теперь отправьте аналоги."
+        )
+
+    else:
+
+        context.user_data["analog_texts"].append(text)
+
+        await update.message.reply_text(
+            f"✅ Аналог #{len(context.user_data['analog_texts'])} сохранён."
+        )
+
+# =========================
+# PDF
+# =========================
 
 def create_pdf_report(text):
-    path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
+
+    path = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".pdf"
+    ).name
+
+    # =========================
+    # ШРИФТ
+    # =========================
 
     font_path = "DejaVuSans.ttf"
     font_name = "DejaVuSans"
 
     try:
-        pdfmetrics.registerFont(TTFont(font_name, font_path))
-    except Exception:
+        pdfmetrics.registerFont(
+            TTFont(font_name, font_path)
+        )
+    except:
         font_name = "Helvetica"
 
-    doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=35, leftMargin=35, topMargin=35, bottomMargin=35)
+    # =========================
+    # ДОК
+    # =========================
+
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=A4,
+        rightMargin=18,
+        leftMargin=18,
+        topMargin=18,
+        bottomMargin=18
+    )
+
     styles = getSampleStyleSheet()
 
-    styles["Normal"].fontName = font_name
-    styles["Normal"].fontSize = 10
-    styles["Normal"].leading = 14
+    styles.add(ParagraphStyle(
+        name="C21Title",
+        fontName=font_name,
+        fontSize=22,
+        leading=28,
+        textColor=colors.HexColor("#B08D57"),
+        alignment=TA_CENTER,
+        spaceAfter=16
+    ))
 
-    styles["Title"].fontName = font_name
-    styles["Title"].fontSize = 16
-    styles["Title"].leading = 20
+    styles.add(ParagraphStyle(
+        name="C21Heading",
+        fontName=font_name,
+        fontSize=14,
+        leading=18,
+        textColor=colors.HexColor("#B08D57"),
+        spaceBefore=14,
+        spaceAfter=8
+    ))
 
-    story = []
-    story.append(Paragraph("AI-отчет по объекту недвижимости", styles["Title"]))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph(datetime.now().strftime("%d.%m.%Y %H:%M"), styles["Normal"]))
-    story.append(Spacer(1, 14))
+    styles["BodyText"].fontName = font_name
+    styles["BodyText"].fontSize = 10
+    styles["BodyText"].leading = 16
 
-    for line in text.split("\n"):
+    elements = []
+
+    # =========================
+    # ЛОГО
+    # =========================
+
+    logo = Image(
+        "Century-21-logo.png",
+        width=40 * mm,
+        height=16 * mm
+    )
+
+    # =========================
+    # HEADER
+    # =========================
+
+    header = Table([
+        [
+            logo,
+            Paragraph(
+                "<b>CMA ОТЧЕТ</b><br/><br/>"
+                "Анализ рыночной стоимости объекта",
+                styles["BodyText"]
+            )
+        ]
+    ], colWidths=[60 * mm, 110 * mm])
+
+    header.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#111111")),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 14),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+    ]))
+
+    elements.append(header)
+    elements.append(Spacer(1, 12))
+
+    # =========================
+    # ВВОДНЫЙ БЛОК
+    # =========================
+
+    intro = Table([[
+        Paragraph(
+            "Правильная цена объекта напрямую влияет "
+            "на количество обращений, срок продажи "
+            "и итоговую стоимость сделки. "
+            "Переоцененные объекты теряют интерес "
+            "покупателей уже в первые недели рекламы.",
+            styles["BodyText"]
+        )
+    ]], colWidths=[170 * mm])
+
+    intro.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F5F5")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#DDDDDD")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+
+    elements.append(intro)
+    elements.append(Spacer(1, 14))
+
+    # =========================
+    # ТЕКСТ
+    # =========================
+
+    sections = text.split("\n")
+
+    for line in sections:
+
         line = line.strip()
-        if line:
-            story.append(Paragraph(escape(line), styles["Normal"]))
-            story.append(Spacer(1, 5))
 
-    doc.build(story)
+        if not line:
+            continue
+
+        # Заголовки
+        if (
+            line.startswith("1.")
+            or line.startswith("2.")
+            or line.startswith("3.")
+            or line.startswith("4.")
+            or line.startswith("5.")
+            or line.startswith("6.")
+            or line.startswith("7.")
+            or line.startswith("8.")
+            or line.startswith("9.")
+            or line.startswith("10.")
+            or line.startswith("11.")
+            or line.startswith("12.")
+            or line.startswith("13.")
+        ):
+
+            elements.append(Spacer(1, 10))
+
+            elements.append(
+                Paragraph(
+                    line.replace("**", ""),
+                    styles["C21Heading"]
+                )
+            )
+
+            elements.append(
+                HRFlowable(
+                    width="100%",
+                    thickness=1,
+                    color=colors.HexColor("#B08D57")
+                )
+            )
+
+            elements.append(Spacer(1, 6))
+
+        # Буллеты
+        elif line.startswith("-"):
+
+            bullet = line.replace("-", "•", 1)
+
+            elements.append(
+                Paragraph(
+                    bullet,
+                    styles["BodyText"]
+                )
+            )
+
+            elements.append(Spacer(1, 4))
+
+        # Обычный текст
+        else:
+
+            elements.append(
+                Paragraph(
+                    line.replace("**", ""),
+                    styles["BodyText"]
+                )
+            )
+
+            elements.append(Spacer(1, 6))
+
+    # =========================
+    # FOOTER
+    # =========================
+
+    elements.append(Spacer(1, 18))
+
+    footer = Paragraph(
+        "Century 21 AI • Аналитический отчет сформирован автоматически",
+        ParagraphStyle(
+            "footer",
+            fontName=font_name,
+            fontSize=8,
+            textColor=colors.grey,
+            alignment=TA_CENTER
+        )
+    )
+
+    elements.append(footer)
+
+    # =========================
+    # BUILD PDF
+    # =========================
+
+    doc.build(elements)
+
     return path
 
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_session(context)
-    await update.message.reply_text(
-        "Привет. Я AI-аналитик недвижимости.\n\n"
-        "Работаем так:\n\n"
-        "/object — загрузить основной объект\n"
-        "/analog — загрузить аналоги\n"
-        "/report — сформировать отчет\n"
-        "/clear — очистить сессию\n\n"
-        "Можно отправлять текст, ссылки и скриншоты."
-    )
-
-
-async def object_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_session(context)
-    context.user_data["mode"] = "object"
-    await update.message.reply_text(
-        "Режим основного объекта включен.\n\n"
-        "Отправь описание, ссылку или скриншоты основного объекта."
-    )
-
-
-async def analog_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_session(context)
-    context.user_data["mode"] = "analog"
-    await update.message.reply_text(
-        "Режим аналогов включен.\n\n"
-        "Отправь 3–10 аналогов: текстом, ссылками или скриншотами."
-    )
-
-
-async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    init_session(context)
-    await update.message.reply_text("Сессия очищена. Начни заново с /object")
-
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_session(context)
-    mode = context.user_data.get("mode")
-    text = update.message.text
-
-    if mode == "object":
-        context.user_data["object_texts"].append(text)
-        await update.message.reply_text("Основной объект добавлен. Можно добавить еще данные или перейти к /analog")
-    elif mode == "analog":
-        context.user_data["analog_texts"].append(text)
-        await update.message.reply_text(
-            f"Аналог добавлен. Всего аналогов текстом: {len(context.user_data['analog_texts'])}. "
-            "Можно добавить еще или нажать /report"
-        )
-    else:
-        await update.message.reply_text(
-            "Сначала выбери режим:\n/object — основной объект\n/analog — аналоги"
-        )
-
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_session(context)
-    mode = context.user_data.get("mode")
-
-    if mode not in ["object", "analog"]:
-        await update.message.reply_text("Сначала выбери режим: /object или /analog")
-        return
-
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    image_bytes = await file.download_as_bytearray()
-    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-    image_url = f"data:image/jpeg;base64,{image_base64}"
-
-    if mode == "object":
-        context.user_data["object_images"].append(image_url)
-        await update.message.reply_text("Скриншот основного объекта добавлен.")
-    else:
-        context.user_data["analog_images"].append(image_url)
-        await update.message.reply_text(
-            f"Скриншот аналога добавлен. Всего скриншотов аналогов: {len(context.user_data['analog_images'])}"
-        )
-
+# =========================
+# REPORT
+# =========================
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_session(context)
 
-    object_texts = context.user_data.get("object_texts", [])
-    analog_texts = context.user_data.get("analog_texts", [])
-    object_images = context.user_data.get("object_images", [])
-    analog_images = context.user_data.get("analog_images", [])
+    if not context.user_data.get("object_texts"):
 
-    if not object_texts and not object_images:
-        await update.message.reply_text("Нет основного объекта. Нажми /object и отправь объект.")
+        await update.message.reply_text(
+            "❌ Нет основного объекта."
+        )
         return
 
-    await update.message.reply_text("Формирую сравнительный анализ и PDF-отчет...")
+    main_object = context.user_data["object_texts"][0]
+    analogs = context.user_data["analog_texts"]
+
+    analogs_text = "\n\n".join(analogs)
 
     prompt = f"""
-Ты ТОП-аналитик рынка недвижимости России и помощник сильного агента.
+Ты профессиональный аналитик рынка недвижимости и эксперт Century 21.
 
-Задача:
-Сравнить основной объект с аналогами, определить адекватность цены, ликвидность и дать рекомендации для агента и клиента.
+Сделай профессиональный CMA-анализ объекта недвижимости.
 
-Основной объект, текстовые данные:
-{chr(10).join(object_texts)}
+=== ОСНОВНОЙ ОБЪЕКТ ===
+{main_object}
 
-Аналоги, текстовые данные:
-{chr(10).join(analog_texts)}
+=== АНАЛОГИ ===
+{analogs_text}
 
-Сделай отчет:
+Сделай отчет строго по структуре:
 
 1. Краткое резюме основного объекта
-2. Таблица сравнения аналогов:
-   - объект
-   - цена
-   - площадь
-   - цена за м²
-   - состояние
-   - локация
-   - сильные/слабые стороны
-3. Средняя цена за м² по аналогам
-4. Диапазон рыночной цены:
-   - цена для быстрой продажи
-   - рыночная цена
-   - максимальная цена
-5. Насколько основной объект переоценен или недооценен
-6. Ликвидность: высокая / средняя / низкая
+2. Таблица сравнения аналогов
+3. Средняя цена за м²
+4. Диапазон рыночной цены
+5. Насколько объект переоценен или недооценен
+6. Ликвидность
 7. Прогноз срока продажи
 8. Что мешает продаже
 9. Что усиливает продажу
@@ -206,64 +365,50 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 12. Рекомендация по цене
 13. Что нужно уточнить для более точной оценки
 
-Пиши жестко, конкретно, без воды.
-Если данных по аналогам мало — честно напиши, что точный CMA невозможен, но сделай предварительную оценку.
+Пиши профессионально.
 """
 
-    content = [{"type": "text", "text": prompt}]
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Ты эксперт Century 21 по недвижимости."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
 
-    for img in object_images:
-        content.append({"type": "image_url", "image_url": {"url": img}})
+    result = response.choices[0].message.content
 
-    for img in analog_images:
-        content.append({"type": "image_url", "image_url": {"url": img}})
+    pdf_path = create_pdf_report(result)
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Ты профессиональный аналитик недвижимости. Пиши по-русски, конкретно и практично."
-                },
-                {
-                    "role": "user",
-                    "content": content
-                }
-            ],
-            max_tokens=2500
-        )
+    await update.message.reply_document(
+        document=open(pdf_path, "rb"),
+        filename="AI_Realty_CMA_Report.pdf"
+    )
 
-        answer = response.choices[0].message.content
+# =========================
+# RUN
+# =========================
 
-        for i in range(0, len(answer), 3500):
-            await update.message.reply_text(answer[i:i + 3500])
+app = ApplicationBuilder().token(
+    TELEGRAM_BOT_TOKEN
+).build()
 
-        pdf_path = create_pdf_report(answer)
-        await update.message.reply_document(
-            document=open(pdf_path, "rb"),
-            filename="AI_Realty_CMA_Report.pdf"
-        )
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("report", report))
 
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка формирования отчета: {e}")
+app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_message
+    )
+)
 
+print("BOT STARTED")
 
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("object", object_mode))
-    app.add_handler(CommandHandler("analog", analog_mode))
-    app.add_handler(CommandHandler("report", report))
-    app.add_handler(CommandHandler("clear", clear))
-
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-
-    print("Бот запущен...")
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+app.run_polling()

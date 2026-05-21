@@ -322,52 +322,75 @@ If an object is too large or complex, leave it unchanged.
  
 def avatar_prompt(style):
     base = """
-Create a professional business portrait from this photo.
- 
-CRITICAL IDENTITY RULES:
-- Do NOT change the person's identity.
-- Preserve the exact face.
-- Preserve facial structure.
-- Preserve eyes, nose, lips, skin tone, face shape and hairstyle.
-- Keep the person fully recognizable.
-- Do not beautify the face excessively.
+Create a professional business portrait from the provided photo.
+
+ABSOLUTE IDENTITY PRESERVATION RULES:
+- Preserve the exact same real person.
+- Preserve the person's gender exactly.
+- Preserve the person's age range exactly.
+- Preserve the exact facial identity.
+- Preserve face shape, jawline, cheekbones and forehead.
+- Preserve the same eyes, eye shape, eyebrows and gaze direction.
+- Preserve the same nose, lips, mouth shape and natural expression.
+- Preserve the same skin tone, natural skin texture, moles, scars and unique facial features.
+- Preserve the same hairstyle, hair color, hairline and facial hair.
+- Do not make the person more feminine or more masculine.
 - Do not make the person younger or older.
-- Do not change gender.
-- Do not change ethnicity.
-- Do not change expression dramatically.
-- Do not alter scars, moles or unique facial features.
-- Only improve clothing, background, lighting, framing and business style.
- 
-The result must look like the same real person, professionally photographed.
+- Do not beautify, glamorize, slim, reshape or redesign the face.
+- Do not replace the person with another person.
+- Do not create a model-like or stock-photo face.
+- The output must be clearly recognizable as the same person from the input photo.
+
+ALLOWED CHANGES ONLY:
+- Business clothing.
+- Background.
+- Lighting.
+- Framing.
+- Slight professional photo polish.
+
+PHOTO STYLE:
+- Photorealistic corporate portrait.
+- Natural realistic skin texture.
+- Professional real estate agent profile photo.
+- Clean, premium, trustworthy business look.
+- No cartoon, no AI-art look, no glamour retouching.
 """
- 
+
     if style == "classic":
         return base + """
-Style: classic professional business portrait.
+STYLE VARIANT:
+Classic business portrait.
 Neutral clean background.
-Business suit or smart business outfit.
-Natural lighting.
-Real estate agent profile photo.
+Dark business suit or smart business jacket.
+White or light business shirt.
+No tie unless it looks natural.
+Realistic office / studio lighting.
+Keep the same person and same face at all costs.
 """
- 
+
     if style == "c21":
         return base + """
-Style: premium Century 21 real estate agent portrait.
-Black and gold corporate aesthetic.
+STYLE VARIANT:
+Century 21 real estate agent portrait.
+Premium black and gold corporate aesthetic.
 Elegant business outfit.
 Clean luxury office background.
-Professional confident look.
+Subtle Century 21 mood, but do not add fake logos or unreadable text.
+Keep the same person and same face at all costs.
 """
- 
+
     if style == "premium":
         return base + """
-Style: high-end LinkedIn business portrait.
+STYLE VARIANT:
+High-end LinkedIn / business portrait.
 Premium studio lighting.
-Clean background.
+Clean neutral background.
+Dark suit or premium business jacket.
+Confident but natural expression.
 Sharp, realistic, professional.
-Luxury real estate consultant style.
+Keep the same person and same face at all costs.
 """
- 
+
     return base
  
  

@@ -44,10 +44,8 @@ MAIN_MENU = ReplyKeyboardMarkup(
 
 PHOTO_MENU = ReplyKeyboardMarkup(
     [
-        ["🧹 Убрать мусор и личные вещи"],
-        ["💡 Улучшить свет и цвет"],
-        ["🏡 Сделать фото продающим"],
-        ["📱 Подготовить для Авито / ЦИАН"],
+        ["✨ Улучшить фото"],
+        ["🧹 Легкая очистка фото"],
         ["⬅️ Назад в меню"],
     ],
     resize_keyboard=True
@@ -134,10 +132,7 @@ def create_styled_pdf(data):
         logo = Paragraph("CENTURY 21", styles["C21Title"])
 
     header = Table([
-        [
-            logo,
-            Paragraph("CMA ОТЧЕТ<br/>Анализ рыночной стоимости объекта", styles["Body"])
-        ]
+        [logo, Paragraph("CMA ОТЧЕТ<br/>Анализ рыночной стоимости объекта", styles["Body"])]
     ], colWidths=[60 * mm, 110 * mm])
 
     header.setStyle(TableStyle([
@@ -266,36 +261,48 @@ def create_styled_pdf(data):
 
 def photo_prompt(task):
     base = """
-Edit this real estate photo realistically.
-Preserve the exact room layout, camera angle, walls, windows, doors, floor, ceiling, furniture positions, room size and view from window.
-Do not redesign the room.
-Do not create a new room.
-Do not remove fixed furniture or architectural elements.
-The result must look like the same property, only cleaner and more professional.
-"""
+Ultra realistic professional real estate photo editing.
 
-    if task == "clean":
-        return base + """
-Remove only visible clutter: small trash, personal belongings, loose cables, random bags, papers, cups, boxes and distracting small objects.
-Keep all real estate features unchanged.
+CRITICAL RULES:
+- Keep the exact same room.
+- Keep the same layout.
+- Keep the same walls, windows, doors, floor, ceiling and furniture.
+- Do not redesign the room.
+- Do not remove large furniture.
+- Do not change geometry.
+- Do not create a new interior.
+- The result must look like the same real property photo.
+
+Goal: make the photo cleaner, brighter and more suitable for a real estate listing.
 """
 
     if task == "light":
         return base + """
-Improve lighting, white balance, contrast, sharpness and color naturally.
-Make the room brighter and cleaner without changing the property.
+Improve only:
+- brightness
+- white balance
+- contrast
+- sharpness
+- color correction
+- natural HDR look
+
+Do not remove objects.
+Do not change furniture.
+Make it look like a professional real estate photo.
 """
 
-    if task == "selling":
+    if task == "soft_clean":
         return base + """
-Make the photo more attractive for a real estate listing: cleaner, brighter, more premium, but still honest and realistic.
-Do not change layout or furniture placement.
-"""
+Do light cleanup only:
+- reduce visual mess
+- make the desk and surfaces look neater
+- remove or minimize small distracting items where possible
+- slightly clean cables and small clutter
 
-    if task == "listing":
-        return base + """
-Prepare this photo for Avito, CIAN and real estate listing platforms.
-Make it clean, bright, sharp and professional while preserving the real property exactly.
+Do not remove large objects.
+Do not remove furniture.
+Do not change the room.
+If an object is too large or complex, leave it unchanged.
 """
 
     return base
@@ -407,10 +414,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     photo_tasks = {
-        "🧹 Убрать мусор и личные вещи": "clean",
-        "💡 Улучшить свет и цвет": "light",
-        "🏡 Сделать фото продающим": "selling",
-        "📱 Подготовить для Авито / ЦИАН": "listing",
+        "✨ Улучшить фото": "light",
+        "🧹 Легкая очистка фото": "soft_clean",
     }
 
     if text in photo_tasks:
@@ -490,7 +495,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не найден REPLICATE_API_TOKEN в Railway Variables.")
             return
 
-        await update.message.reply_text("Фото принято. Обрабатываю через Replicate/FLUX 30–120 секунд...")
+        await update.message.reply_text("Фото принято. Обрабатываю 30–120 секунд...")
 
         input_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
@@ -508,7 +513,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_document(
                 document=open(output_path, "rb"),
                 filename="C21_AI_photo_ready.png",
-                caption="Готово. Фото обработано. Проверь, что планировка и реальные свойства объекта не изменились."
+                caption="Готово. Фото обработано."
             )
 
         except Exception as e:
@@ -635,3 +640,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

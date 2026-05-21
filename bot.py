@@ -38,7 +38,7 @@ def init_session(context):
 def create_pdf_report(text):
     path = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
 
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    font_path = "DejaVuSans.ttf"
     font_name = "DejaVuSans"
 
     try:
